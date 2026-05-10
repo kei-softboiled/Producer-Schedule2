@@ -1,0 +1,2 @@
+# Producer-Schedule2
+アイドルマスターの公式イベントスケジュールをGoogleカレンダーに登録するための、Googleスプレッドシート用Google App Script。

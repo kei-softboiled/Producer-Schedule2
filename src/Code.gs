@@ -7,6 +7,9 @@ const LOOKAHEAD_MONTHS = 3;
 const EVENT_DURATION_MINUTES = 60;
 const CALENDAR_NAME_PREFIX = 'P予定表';
 const TIME_ZONE = 'Asia/Tokyo';
+const CALENDAR_OPERATION_INTERVAL_MS = 1200;
+const CALENDAR_RATE_LIMIT_RETRY_MS = 10000;
+const CALENDAR_RATE_LIMIT_MAX_RETRIES = 3;
 
 const HEADERS = [
   'イベントID',
@@ -372,6 +375,7 @@ function syncRecordToBrandCalendars_(record) {
     }
 
     nextIds[brand] = event.getId();
+    waitForCalendarQuota_();
   });
 
   return nextIds;
@@ -382,15 +386,19 @@ function syncRecordToBrandCalendars_(record) {
  */
 function createCalendarEvent_(calendar, record, title, description) {
   if (record.hasTime) {
-    return calendar.createEvent(title, record.start, record.end, {
-      location: record.location,
-      description: description
+    return runCalendarOperation_(function() {
+      return calendar.createEvent(title, record.start, record.end, {
+        location: record.location,
+        description: description
+      });
     });
   }
 
-  return calendar.createAllDayEvent(title, record.date, {
-    location: record.location,
-    description: description
+  return runCalendarOperation_(function() {
+    return calendar.createAllDayEvent(title, record.date, {
+      location: record.location,
+      description: description
+    });
   });
 }
 
@@ -398,15 +406,17 @@ function createCalendarEvent_(calendar, record, title, description) {
  * 既存のカレンダー予定を最新情報で更新します。
  */
 function updateCalendarEvent_(event, record, title, description) {
-  event.setTitle(title);
-  event.setLocation(record.location || '');
-  event.setDescription(description);
+  runCalendarOperation_(function() {
+    event.setTitle(title);
+    event.setLocation(record.location || '');
+    event.setDescription(description);
 
-  if (record.hasTime) {
-    event.setTime(record.start, record.end);
-  } else {
-    event.setAllDayDate(record.date);
-  }
+    if (record.hasTime) {
+      event.setTime(record.start, record.end);
+    } else {
+      event.setAllDayDate(record.date);
+    }
+  });
 }
 
 function buildCalendarDescription_(record) {
@@ -538,7 +548,48 @@ function normalizeApiBrands_(brands) {
 function getOrCreateCalendar_(brand) {
   const name = CALENDAR_NAME_PREFIX + '（' + brand + '）';
   const calendars = CalendarApp.getCalendarsByName(name);
-  return calendars.length ? calendars[0] : CalendarApp.createCalendar(name);
+
+  if (calendars.length) {
+    return calendars[0];
+  }
+
+  return runCalendarOperation_(function() {
+    return CalendarApp.createCalendar(name);
+  });
+}
+
+/**
+ * Calendar API の短時間連続実行による制限を避けるため、操作間隔を空けます。
+ */
+function waitForCalendarQuota_() {
+  Utilities.sleep(CALENDAR_OPERATION_INTERVAL_MS);
+}
+
+/**
+ * Calendar API 操作を一定間隔で実行し、短時間制限に当たった場合だけ再試行します。
+ */
+function runCalendarOperation_(operation) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= CALENDAR_RATE_LIMIT_MAX_RETRIES; attempt++) {
+    try {
+      const result = operation();
+      waitForCalendarQuota_();
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (!isCalendarRateLimitError_(error) || attempt === CALENDAR_RATE_LIMIT_MAX_RETRIES) {
+        throw error;
+      }
+      Utilities.sleep(CALENDAR_RATE_LIMIT_RETRY_MS * (attempt + 1));
+    }
+  }
+
+  throw lastError;
+}
+
+function isCalendarRateLimitError_(error) {
+  return /too many calendars|too many calendar events|try again later|Service invoked too many times/i.test(String(error && error.message || error));
 }
 
 function findCalendarEvent_(calendar, eventId) {

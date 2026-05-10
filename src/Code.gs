@@ -23,7 +23,8 @@ const HEADERS = [
   'URL',
   '取得日時',
   '同期日時',
-  'カレンダーイベントID'
+  'カレンダーイベントID',
+  '同期ハッシュ'
 ];
 
 const BRANDS = [
@@ -69,9 +70,15 @@ function syncScheduleToCalendars() {
       return;
     }
 
+    const syncHash = buildSyncHash_(record);
+    if (shouldSkipCalendarSync_(record, syncHash)) {
+      return;
+    }
+
     const eventIdsByBrand = syncRecordToBrandCalendars_(record);
     sheet.getRange(record.rowIndex, HEADERS.indexOf('同期日時') + 1).setValue(syncedAt);
     sheet.getRange(record.rowIndex, HEADERS.indexOf('カレンダーイベントID') + 1).setValue(JSON.stringify(eventIdsByBrand));
+    sheet.getRange(record.rowIndex, HEADERS.indexOf('同期ハッシュ') + 1).setValue(syncHash);
   });
 }
 
@@ -331,6 +338,7 @@ function upsertEventsToSheet_(sheet, events) {
     if (existingRecord) {
       rowValues[HEADERS.indexOf('同期日時')] = existingRecord.syncedAt || '';
       rowValues[HEADERS.indexOf('カレンダーイベントID')] = existingRecord.calendarEventIds || '';
+      rowValues[HEADERS.indexOf('同期ハッシュ')] = existingRecord.syncHash || '';
       sheet.getRange(existingRecord.rowIndex, 1, 1, HEADERS.length).setValues([rowValues]);
     } else {
       sheet.appendRow(rowValues);
@@ -379,6 +387,38 @@ function syncRecordToBrandCalendars_(record) {
   });
 
   return nextIds;
+}
+
+/**
+ * 前回同期時と内容が同じ場合は、CalendarApp の更新処理を省略します。
+ */
+function shouldSkipCalendarSync_(record, syncHash) {
+  if (!record.syncHash || record.syncHash !== syncHash) {
+    return false;
+  }
+
+  const currentIds = safeJsonParse_(record.calendarEventIds, {});
+  return record.brands.every(function(brand) {
+    return !!currentIds[brand];
+  });
+}
+
+/**
+ * カレンダー予定に反映する項目だけから差分判定用ハッシュを作ります。
+ */
+function buildSyncHash_(record) {
+  const values = [
+    record.status,
+    record.title,
+    Utilities.formatDate(record.date, TIME_ZONE, 'yyyy-MM-dd'),
+    record.hasTime ? Utilities.formatDate(record.start, TIME_ZONE, 'HH:mm') : '',
+    record.hasTime ? Utilities.formatDate(record.end, TIME_ZONE, 'HH:mm') : '',
+    record.brands.join(','),
+    record.location || '',
+    record.url || ''
+  ];
+
+  return createHash_(values.join('|'));
 }
 
 /**
@@ -476,7 +516,8 @@ function readScheduleRecords_(sheet) {
       location: String(row[HEADERS.indexOf('場所')] || ''),
       url: String(row[HEADERS.indexOf('URL')] || ''),
       syncedAt: row[HEADERS.indexOf('同期日時')] || '',
-      calendarEventIds: String(row[HEADERS.indexOf('カレンダーイベントID')] || '')
+      calendarEventIds: String(row[HEADERS.indexOf('カレンダーイベントID')] || ''),
+      syncHash: String(row[HEADERS.indexOf('同期ハッシュ')] || '')
     };
   }).filter(function(record) {
     return record && record.id && record.title && record.date;
@@ -495,6 +536,7 @@ function eventToRow_(event, fetchedAt) {
     event.location,
     event.url,
     fetchedAt,
+    '',
     '',
     ''
   ];
@@ -711,11 +753,15 @@ function buildEventId_(date, title, brands, url) {
     brands.join('|'),
     url || ''
   ].join('|');
+  return createHash_(source).slice(0, 24);
+}
+
+function createHash_(source) {
   const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, source, Utilities.Charset.UTF_8);
   return digest.map(function(byte) {
     const value = byte < 0 ? byte + 256 : byte;
     return ('0' + value.toString(16)).slice(-2);
-  }).join('').slice(0, 24);
+  }).join('');
 }
 
 function cleanTitle_(value) {

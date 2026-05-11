@@ -15,6 +15,7 @@ const HEADERS = [
   'イベントID',
   '状態',
   '日付',
+  '終了日',
   '開始時刻',
   '終了時刻',
   'タイトル',
@@ -201,6 +202,8 @@ function normalizeOfficialApiEvent_(article, fetchedAt) {
     if (event.end.getTime() <= event.start.getTime()) {
       event.end = new Date(event.end.getTime() + 24 * 60 * 60000);
     }
+  } else if (!hasTime && end && end.getTime() > start.getTime()) {
+    event.endDate = toAllDayEndDate_(end);
   }
 
   event.id = String(article._id || event.id);
@@ -419,6 +422,7 @@ function buildSyncHash_(record) {
     record.status,
     record.title,
     Utilities.formatDate(record.date, TIME_ZONE, 'yyyy-MM-dd'),
+    Utilities.formatDate(record.endDate, TIME_ZONE, 'yyyy-MM-dd'),
     record.hasTime ? Utilities.formatDate(record.start, TIME_ZONE, 'HH:mm') : '',
     record.hasTime ? Utilities.formatDate(record.end, TIME_ZONE, 'HH:mm') : '',
     record.brands.join(','),
@@ -443,7 +447,7 @@ function createCalendarEvent_(calendar, record, title, description) {
   }
 
   return runCalendarOperation_(function() {
-    return calendar.createAllDayEvent(title, record.date, {
+    return calendar.createAllDayEvent(title, record.date, getAllDayEndExclusiveDate_(record), {
       location: record.location,
       description: description
     });
@@ -462,7 +466,7 @@ function updateCalendarEvent_(event, record, title, description) {
     if (record.hasTime) {
       event.setTime(record.start, record.end);
     } else {
-      event.setAllDayDate(record.date);
+      event.setAllDayDates(record.date, getAllDayEndExclusiveDate_(record));
     }
   });
 }
@@ -483,6 +487,7 @@ function getScheduleSheet_() {
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(HEADERS);
   } else {
+    migrateScheduleSheetHeaders_(sheet);
     const currentHeaders = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
     if (currentHeaders.join() !== HEADERS.join()) {
       sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
@@ -491,6 +496,23 @@ function getScheduleSheet_() {
 
   sheet.setFrozenRows(1);
   return sheet;
+}
+
+/**
+ * 既存シートに終了日列がない場合、日付列の直後へ追加して列ずれを防ぎます。
+ */
+function migrateScheduleSheetHeaders_(sheet) {
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const currentHeaders = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+
+  if (currentHeaders.indexOf('終了日') !== -1) {
+    return;
+  }
+
+  const dateColumnIndex = currentHeaders.indexOf('日付') + 1;
+  if (dateColumnIndex > 0) {
+    sheet.insertColumnAfter(dateColumnIndex);
+  }
 }
 
 function readScheduleRecords_(sheet) {
@@ -505,6 +527,7 @@ function readScheduleRecords_(sheet) {
       return null;
     }
 
+    const endDate = normalizeSheetDate_(row[HEADERS.indexOf('終了日')]) || new Date(date);
     const startText = String(row[HEADERS.indexOf('開始時刻')] || '');
     const hasTime = !!startText;
     const start = hasTime ? combineDateAndTime_(date, startText) : new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -516,6 +539,7 @@ function readScheduleRecords_(sheet) {
       id: String(row[HEADERS.indexOf('イベントID')] || ''),
       status: String(row[HEADERS.indexOf('状態')] || 'ACTIVE'),
       date: date,
+      endDate: endDate,
       start: start,
       end: end,
       hasTime: hasTime,
@@ -537,6 +561,7 @@ function eventToRow_(event, fetchedAt) {
     event.id,
     event.status,
     event.date,
+    event.endDate,
     event.hasTime ? formatTime_(event.start) : '',
     event.hasTime ? formatTime_(event.end) : '',
     event.title,
@@ -559,6 +584,7 @@ function buildEvent_(title, start, hasTime, location, url, fetchedAt, detectedBr
     id: buildEventId_(date, title, brands, url),
     status: isCanceledTitle_(title) ? 'CANCELED' : 'ACTIVE',
     date: date,
+    endDate: new Date(date),
     start: hasTime ? start : date,
     end: end,
     hasTime: hasTime,
@@ -907,6 +933,15 @@ function buildEffectiveStartDate_(apiStart, displayTime) {
 
 function buildDateWithMinutes_(date, minutes) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate(), Math.floor(minutes / 60), minutes % 60, 0);
+}
+
+function toAllDayEndDate_(end) {
+  return new Date(end.getFullYear(), end.getMonth(), end.getDate());
+}
+
+function getAllDayEndExclusiveDate_(record) {
+  const endDate = record.endDate || record.date;
+  return new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate() + 1);
 }
 
 function toMinutes_(hour, minute) {

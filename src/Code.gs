@@ -852,7 +852,7 @@ function hasExplicitTime_(date, displayTime) {
     return true;
   }
 
-  return !!(displayTime && displayTime.startMinutes !== null);
+  return !!(displayTime && displayTime.startMinutes > 0);
 }
 
 function hasTimeInDate_(date) {
@@ -898,7 +898,7 @@ function normalizeDisplayDateText_(value) {
 }
 
 function buildEffectiveStartDate_(apiStart, displayTime) {
-  if (hasTimeInDate_(apiStart) || !displayTime || displayTime.startMinutes === null) {
+  if (hasTimeInDate_(apiStart) || !displayTime || displayTime.startMinutes <= 0) {
     return apiStart;
   }
 

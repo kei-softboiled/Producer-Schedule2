@@ -187,12 +187,20 @@ function normalizeOfficialApiEvent_(article, fetchedAt) {
   }
 
   const brands = normalizeApiBrands_(article.brand);
-  const hasTime = hasExplicitTime_(start, article.event_dspdate);
+  const apiStartHasTime = hasTimeInDate_(start);
+  const displayTime = parseDisplayTimeRange_(article.event_dspdate);
+  const effectiveStart = buildEffectiveStartDate_(start, displayTime);
+  const hasTime = hasExplicitTime_(effectiveStart, displayTime);
   const url = article.event_url || article.url || SCHEDULE_URL;
-  const event = buildEvent_(title, start, hasTime, article.event_place || '', absolutizeUrl_(url), fetchedAt, brands);
+  const event = buildEvent_(title, effectiveStart, hasTime, article.event_place || '', absolutizeUrl_(url), fetchedAt, brands);
 
-  if (end && hasTime && end.getTime() > start.getTime()) {
+  if (end && apiStartHasTime && hasTime && end.getTime() > start.getTime()) {
     event.end = end;
+  } else if (hasTime && displayTime && displayTime.endMinutes !== null) {
+    event.end = buildDateWithMinutes_(event.date, displayTime.endMinutes);
+    if (event.end.getTime() <= event.start.getTime()) {
+      event.end = new Date(event.end.getTime() + 24 * 60 * 60000);
+    }
   }
 
   event.id = String(article._id || event.id);
@@ -839,12 +847,70 @@ function unixSecondsToDate_(value) {
   return new Date(seconds * 1000);
 }
 
-function hasExplicitTime_(date, displayDate) {
-  if (date.getHours() !== 0 || date.getMinutes() !== 0) {
+function hasExplicitTime_(date, displayTime) {
+  if (hasTimeInDate_(date)) {
     return true;
   }
 
-  return /\d{1,2}:\d{2}/.test(String(displayDate || ''));
+  return !!(displayTime && displayTime.startMinutes !== null);
+}
+
+function hasTimeInDate_(date) {
+  return date.getHours() !== 0 || date.getMinutes() !== 0;
+}
+
+/**
+ * 公式画面の表示用日付から時刻範囲を取り出します。
+ * 例: 21：00～、19:00～21:00、開場 16:00 / 開演 17:00
+ */
+function parseDisplayTimeRange_(displayDate) {
+  const text = normalizeDisplayDateText_(displayDate);
+  if (!text) {
+    return null;
+  }
+
+  const startMatch = text.match(/(?:開演|開始|start)\s*(\d{1,2}):(\d{2})/i) || text.match(/(\d{1,2}):(\d{2})/);
+  if (!startMatch) {
+    return null;
+  }
+
+  const startMinutes = toMinutes_(startMatch[1], startMatch[2]);
+  const afterStart = text.slice(startMatch.index + startMatch[0].length);
+  const labeledEndMatch = text.match(/(?:終演|終了|end)\s*(\d{1,2}):(\d{2})/i);
+  const rangeEndMatch = afterStart.match(/^\s*~\s*(\d{1,2}):(\d{2})/);
+  const endMatch = labeledEndMatch || rangeEndMatch;
+
+  return {
+    startMinutes: startMinutes,
+    endMinutes: endMatch ? toMinutes_(endMatch[1], endMatch[2]) : null
+  };
+}
+
+function normalizeDisplayDateText_(value) {
+  return String(value || '')
+    .replace(/[０-９]/g, function(char) {
+      return String.fromCharCode(char.charCodeAt(0) - 0xFEE0);
+    })
+    .replace(/[：]/g, ':')
+    .replace(/[～〜－ー]/g, '~')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildEffectiveStartDate_(apiStart, displayTime) {
+  if (hasTimeInDate_(apiStart) || !displayTime || displayTime.startMinutes === null) {
+    return apiStart;
+  }
+
+  return buildDateWithMinutes_(apiStart, displayTime.startMinutes);
+}
+
+function buildDateWithMinutes_(date, minutes) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), Math.floor(minutes / 60), minutes % 60, 0);
+}
+
+function toMinutes_(hour, minute) {
+  return Number(hour) * 60 + Number(minute);
 }
 
 function safeJsonParse_(value, fallback) {

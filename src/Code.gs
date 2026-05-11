@@ -206,6 +206,10 @@ function normalizeOfficialApiEvent_(article, fetchedAt) {
     event.endDate = toAllDayEndDate_(end);
   }
 
+  if (hasTime) {
+    event.endDate = toDateOnly_(event.end);
+  }
+
   event.id = String(article._id || event.id);
   return event;
 }
@@ -532,7 +536,7 @@ function readScheduleRecords_(sheet) {
     const hasTime = !!startText;
     const start = hasTime ? combineDateAndTime_(date, startText) : new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const endText = String(row[HEADERS.indexOf('終了時刻')] || '');
-    const end = hasTime && endText ? combineDateAndTime_(date, endText) : new Date(start.getTime() + EVENT_DURATION_MINUTES * 60000);
+    const end = hasTime && endText ? combineDateAndTime_(endDate, endText) : new Date(start.getTime() + EVENT_DURATION_MINUTES * 60000);
 
     return {
       rowIndex: index + 2,
@@ -584,7 +588,7 @@ function buildEvent_(title, start, hasTime, location, url, fetchedAt, detectedBr
     id: buildEventId_(date, title, brands, url),
     status: isCanceledTitle_(title) ? 'CANCELED' : 'ACTIVE',
     date: date,
-    endDate: new Date(date),
+    endDate: hasTime ? toDateOnly_(end) : new Date(date),
     start: hasTime ? start : date,
     end: end,
     hasTime: hasTime,
@@ -933,6 +937,10 @@ function buildEffectiveStartDate_(apiStart, displayTime) {
 
 function buildDateWithMinutes_(date, minutes) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate(), Math.floor(minutes / 60), minutes % 60, 0);
+}
+
+function toDateOnly_(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 function toAllDayEndDate_(end) {
